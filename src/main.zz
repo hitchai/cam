@@ -1,4 +1,5 @@
 using <stdio.h>::{fprintf, printf};
+using <stdint.h>::{uint8_t};
 using <assert.h>::{assert};
 using <libavdevice/avdevice.h>::{avdevice_register_all};
 using <libavcodec/avcodec.h>::{
@@ -8,6 +9,7 @@ using <libavcodec/avcodec.h>::{
     avcodec_register_all,
     avcodec_get_name,
     avcodec_open2,
+    avcodec_close,
 };
 
 using <libavformat/avformat.h>::{
@@ -34,7 +36,7 @@ using <libavformat/avformat.h>::{
     avcodec_decode_video2,
     av_free_packet,
     av_frame_unref,
-
+    avformat_close_input,
 };
 
 using <libswscale/swscale.h>::{
@@ -42,7 +44,6 @@ using <libswscale/swscale.h>::{
     SwsContext,
     sws_getCachedContext,
 };
-
 
 using <opencv2/opencv.hpp>::cv::{
     Mat,
@@ -58,103 +59,142 @@ using <opencv2/opencv.hpp>::cv::{
     COLOR_YUV2RGB_UYVY,
 };
 
-export fn main() -> int {
-    printf("hello cam\n");
+using error;
 
-    avdevice_register_all();
+struct Input {
+    AVFormatContext mut* ctx;
+    AVCodecContext  mut* codec;
+    // scaler for yuv->bgr
+    SwsContext      mut* sws;
+}
 
-
+fn input_open(Input set<open> mut* self, error::Error set<Error> mut* err) {
+    // open camera
     AVInputFormat mut * inputFormat = av_find_input_format("v4l2");
-
 
     AVDictionary mut *mut options = 0;
     av_dict_set(&options, "framerate", "120", 0);
-    av_dict_set(&options, "video_size", "1024x768", 0);
+    av_dict_set(&options, "video_size", "1280x720", 0);
 
-    AVFormatContext mut* mut ifcx = 0;
-    int mut err = avformat_open_input(&ifcx, "/dev/video0", inputFormat, &options);
-    if (err < 0) {
-        fprintf(stderr, "avformat_open_input failed: %s\n", av_err2str(err));
-        return 1;
+    int mut e = avformat_open_input(&self->ctx, "/dev/video0", inputFormat, &options);
+    if (e < 0) {
+        error::fail(err, e, "avformat_open_input: %s", av_err2str(e));
+        return;
     }
     av_dict_free(&options);
 
     AVCodec mut* mut dec;
-    int stream_index = av_find_best_stream(ifcx, AVMEDIA_TYPE_VIDEO, -1, -1, &dec, 0);
+    int stream_index = av_find_best_stream(self->ctx, AVMEDIA_TYPE_VIDEO, -1, -1, &dec, 0);
     if (stream_index < 0) {
-        fprintf(stderr, "Cannot find a video stream in the input file\n");
-        return 2;
+        error::fail(err, 1, "Cannot find a video stream in the input");
+        goto exit;
     }
 
-    AVCodecContext mut *dec_ctx = (ifcx->streams[stream_index])->codec;
-    av_opt_set_int(dec_ctx, "refcounted_frames", 1, 0);
+    self->codec = (self->ctx->streams[stream_index])->codec;
+    av_opt_set_int(self->codec, "refcounted_frames", 1, 0);
 
-
-    err = avcodec_open2(dec_ctx, dec, NULL);
-    if (err < 0) {
-        fprintf(stderr, "avcodec_open2 failed: %s\n", av_err2str(err));
-        return err;
+    e = avcodec_open2(self->codec, dec, NULL);
+    if (e < 0) {
+        self->codec = 0;
+        error::fail(err, e, "avcodec_open2: %s", av_err2str(e));
+        goto exit;
     }
 
+    assert(self->ctx->video_codec_id == AV_CODEC_ID_RAWVIDEO);
 
-    printf("video codec: %s\n", avcodec_get_name(ifcx->video_codec_id));
+    return;
 
-    assert(ifcx->video_codec_id == AV_CODEC_ID_RAWVIDEO);
+exit:
+    input_close(self);
+}
 
-    namedWindow("cam",1);
+fn input_frame(Input require<open> mut* self, uint8_t mut* data, error::Error set<Error> mut* err) {
+    AVPacket mut packet;
+    AVFrame mut* frame = av_frame_alloc();
+    int mut e = av_read_frame(self->ctx, &packet);
+    if (e < 0) {
+        error::fail(err, e, "av_read_frame: %s", av_err2str(e));
+        return;
+    }
+    int mut got_frame = 0;
+    e = avcodec_decode_video2(self->codec, frame, &got_frame, &packet);
 
+    if (e < 0) {
+        error::fail(err, e, "avcodec_decode_video2 : %s", av_err2str(e));
+        return;
+    }
+
+    printf("frame %dx%d format:%d color:%d\n", frame->width, frame->height, frame->format, frame->color_range);
+
+    assert(frame->format == AV_PIX_FMT_YUYV422);
+
+    // convert to rbg
+    self->sws = sws_getCachedContext(
+            self->sws,
+            frame->width,
+            frame->height,
+            (AVPixelFormat)frame->format,
+            frame->width,
+            frame->height,
+            AV_PIX_FMT_BGR24,
+            0,
+            0,
+            0,
+            0);
+
+    int rgbline = 3 * frame->width;
+    sws_scale(self->sws,
+            frame->data,
+            frame->linesize,
+            0,
+            frame->height,
+            &data,
+            &rgbline);
+
+    av_frame_unref(frame);
+    av_free_packet(&packet);
+}
+
+fn input_close(Input unset<open> mut * self) {
+    if (self->codec) {
+        avcodec_close(self->codec);
+    }
+    if (self->ctx) {
+        avformat_close_input(&self->ctx);
+    }
+}
+
+export fn main() -> int {
+    printf("hello cam\n");
+
+    error::Error mut err = {0};
+
+    avdevice_register_all();
+
+    Input mut input = {0};
+    input_open(&input, &err);
+    error::abort(&err);
+
+
+
+    // scaler for yuv->bgr
     SwsContext mut * mut sws = 0;
 
 
-    AVFrame mut* frame = av_frame_alloc();
-    AVPacket mut packet;
+    // opencv
+    namedWindow("cam",1);
+
+    Mat mut xi = Mat(720, 1280, CV_8UC3);
     for (;;) {
-        int err = av_read_frame(ifcx, &packet);
-        if (err < 0) {
-            break;
-        }
-        int mut got_frame = 0;
-        int ret = avcodec_decode_video2(dec_ctx, frame, &got_frame, &packet);
 
-        if (ret < 0) {
-            fprintf(stderr, "decode error: %s\n", av_err2str(err));
-        }
-
-        printf("frame %dx%d format:%d color:%d\n", frame->width, frame->height, frame->format, frame->color_range);
-
-        assert(frame->format ==  AV_PIX_FMT_YUYV422);
-
-        sws = sws_getCachedContext(
-                sws,
-                frame->width,
-                frame->height,
-                (AVPixelFormat)frame->format,
-                frame->width,
-                frame->height,
-                AV_PIX_FMT_BGR24,
-                0,
-                0,
-                0,
-                0);
-
-        Mat mut xi = Mat(frame->height, frame->width, CV_8UC3);
-
-        int rgbline = 3 * frame->width;
-        sws_scale(sws,
-                frame->data,
-                frame->linesize,
-                0,
-                frame->height,
-                &xi.data,
-                &rgbline);
+        input_frame(&input, xi.data, &err);
+        error::abort(&err);
 
         imshow("cam", xi);
         waitKey(1);
-
-        av_frame_unref(frame);
-        av_free_packet(&packet);
     }
 
 
+    input_close(&input);
     return 0;
 }
