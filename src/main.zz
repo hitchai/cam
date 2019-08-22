@@ -1,200 +1,197 @@
-using <stdio.h>::{fprintf, printf};
-using <stdint.h>::{uint8_t};
-using <assert.h>::{assert};
-using <libavdevice/avdevice.h>::{avdevice_register_all};
-using <libavcodec/avcodec.h>::{
-    AV_CODEC_ID_RAWVIDEO,
-    AVCodecContext,
-    AVCodec,
-    avcodec_register_all,
-    avcodec_get_name,
-    avcodec_open2,
-    avcodec_close,
-};
-
-using <libavformat/avformat.h>::{
-    AVMEDIA_TYPE_VIDEO,
-    AV_PIX_FMT_YUYV422,
-
-    AVPixelFormat,
-    AVDictionary,
-    AVFormatContext,
-    AVInputFormat,
-    AVPacket,
-    AVFrame,
-
-    av_frame_alloc,
-    av_opt_set_int,
-    av_dict_free,
-    av_dict_set,
-    avformat_alloc_context,
-    avformat_open_input,
-    av_find_input_format,
-    av_register_all,
-    av_read_frame,
-    av_find_best_stream,
-    avcodec_decode_video2,
-    av_free_packet,
-    av_frame_unref,
-    avformat_close_input,
-};
-
-using <libswscale/swscale.h>::{
-    sws_scale,
-    SwsContext,
-    sws_getCachedContext,
-};
-
-using <opencv2/opencv.hpp>::cv::{
-    Mat,
-    namedWindow,
-    cvtColor,
-    GaussianBlur,
-    Canny,
-    imshow,
-    waitKey,
-    Size,
-    CAP_PROP_FPS,
-    CV_16U,
-    COLOR_YUV2RGB_UYVY,
-};
-
 using error;
+using camera;
+using display;
+using <sys/select.h>::{
+    select,
+    fd_set,
+    FD_ZERO,
+    FD_SET,
+    (struct timeval) as Timeval,
+};
+using <errno.h>::{
+    errno,
+    perror,
+    EINTR,
+};
+using <stdio.h>::{
+    printf,
+    fprintf,
+    stderr,
+    exit,
+};
+using <stdint.h>::{uint8_t};
+using <memory.h>::{
+    malloc,
+    alloca,
+    memset
+};
 
-struct Input {
-    AVFormatContext mut* ctx;
-    AVCodecContext  mut* codec;
-    // scaler for yuv->bgr
-    SwsContext      mut* sws;
-}
-
-fn input_open(Input set<open> mut* self, error::Error set<Error> mut* err) {
-    // open camera
-    AVInputFormat mut * inputFormat = av_find_input_format("v4l2");
-
-    AVDictionary mut *mut options = 0;
-    av_dict_set(&options, "framerate", "120", 0);
-    av_dict_set(&options, "video_size", "1280x720", 0);
-
-    int mut e = avformat_open_input(&self->ctx, "/dev/video0", inputFormat, &options);
-    if (e < 0) {
-        error::fail(err, e, "avformat_open_input: %s", av_err2str(e));
-        return;
-    }
-    av_dict_free(&options);
-
-    AVCodec mut* mut dec;
-    int stream_index = av_find_best_stream(self->ctx, AVMEDIA_TYPE_VIDEO, -1, -1, &dec, 0);
-    if (stream_index < 0) {
-        error::fail(err, 1, "Cannot find a video stream in the input");
-        goto exit;
-    }
-
-    self->codec = (self->ctx->streams[stream_index])->codec;
-    av_opt_set_int(self->codec, "refcounted_frames", 1, 0);
-
-    e = avcodec_open2(self->codec, dec, NULL);
-    if (e < 0) {
-        self->codec = 0;
-        error::fail(err, e, "avcodec_open2: %s", av_err2str(e));
-        goto exit;
-    }
-
-    assert(self->ctx->video_codec_id == AV_CODEC_ID_RAWVIDEO);
-
-    return;
-
-exit:
-    input_close(self);
-}
-
-fn input_frame(Input require<open> mut* self, uint8_t mut* data, error::Error set<Error> mut* err) {
-    AVPacket mut packet;
-    AVFrame mut* frame = av_frame_alloc();
-    int mut e = av_read_frame(self->ctx, &packet);
-    if (e < 0) {
-        error::fail(err, e, "av_read_frame: %s", av_err2str(e));
-        return;
-    }
-    int mut got_frame = 0;
-    e = avcodec_decode_video2(self->codec, frame, &got_frame, &packet);
-
-    if (e < 0) {
-        error::fail(err, e, "avcodec_decode_video2 : %s", av_err2str(e));
-        return;
-    }
-
-    printf("frame %dx%d format:%d color:%d\n", frame->width, frame->height, frame->format, frame->color_range);
-
-    assert(frame->format == AV_PIX_FMT_YUYV422);
-
-    // convert to rbg
-    self->sws = sws_getCachedContext(
-            self->sws,
-            frame->width,
-            frame->height,
-            (AVPixelFormat)frame->format,
-            frame->width,
-            frame->height,
-            AV_PIX_FMT_BGR24,
-            0,
-            0,
-            0,
-            0);
-
-    int rgbline = 3 * frame->width;
-    sws_scale(self->sws,
-            frame->data,
-            frame->linesize,
-            0,
-            frame->height,
-            &data,
-            &rgbline);
-
-    av_frame_unref(frame);
-    av_free_packet(&packet);
-}
-
-fn input_close(Input unset<open> mut * self) {
-    if (self->codec) {
-        avcodec_close(self->codec);
-    }
-    if (self->ctx) {
-        avformat_close_input(&self->ctx);
-    }
-}
-
-export fn main() -> int {
-    printf("hello cam\n");
-
+pub fn main() -> int {
     error::Error mut err = {0};
 
-    avdevice_register_all();
+    display::Display mut view = {0};
+    display::open(&view, &err);
+    error::abort(&err);
 
-    Input mut input = {0};
-    input_open(&input, &err);
+    camera::Camera mut cam = {0};
+
+    camera::open(&cam, &err, "/dev/video2");
+    error::abort(&err);
+
+    camera::streamon(&cam, &err);
     error::abort(&err);
 
 
+    uint8_t mut* mut rgb_frame = malloc(cam.height * cam.width * 3);
+    memset(rgb_frame, 100, cam.height * cam.width * 3);
 
-    // scaler for yuv->bgr
-    SwsContext mut * mut sws = 0;
 
-
-    // opencv
-    namedWindow("cam",1);
-
-    Mat mut xi = Mat(720, 1280, CV_8UC3);
     for (;;) {
+        fd_set mut fds;
+        Timeval mut tv = Timeval {
+            .tv_sec  = 2,
+            .tv_usec = 0,
+        };
 
-        input_frame(&input, xi.data, &err);
+        FD_ZERO(&fds);
+        FD_SET(cam.fd, &fds);
+
+        int r = select(cam.fd + 1, &fds, NULL, NULL, &tv);
+        if r == -1 {
+            if errno == EINTR {
+                continue;
+            }
+            perror("select");
+            return 1;
+        }
+
+        if (0 == r) {
+            fprintf(stderr, "select timeout\\n");
+            exit(EXIT_FAILURE);
+        }
+
+        camera::Frame frame = camera::take(&cam, &err);
         error::abort(&err);
 
-        imshow("cam", xi);
-        waitKey(1);
+
+        yuyv_to_gray(frame.data, rgb_frame, cam.width, cam.height);
+        //yuyv_to_rgb(frame.data, rgb_frame, cam.width, cam.height);
+
+
+        display::show(&view, rgb_frame, cam.width, cam.height);
+
+        camera::release(&frame, &err);
+        error::abort(&err);
     }
 
 
-    input_close(&input);
+    camera::streamoff(&cam, &err);
+    error::abort(&err);
+    camera::close(&cam);
     return 0;
+}
+
+
+macro rgbclip(to, val) {
+    if (v > 255) {
+        to = 255;
+    } else if (v < 0) {
+        to = 0;
+    } else {
+        to = v;
+    }
+}
+
+fn yuyv_to_gray(uint8_t *src, uint8_t mut * mut dest , int width, int height) {
+    for (int mut y = 0; y < height ; y++) {
+        char * mut src_r = src + (width * 2 * y);
+        char mut * mut gray = dest + (width* y);
+        for (int mut x = 0; x < width; x += 2) {
+            gray[x] = src_r[0];
+            src_r += 2;
+            gray[x + 1] = src_r[0];
+            src_r += 2;
+        }
+    }
+}
+
+
+fn yuyv_to_rgb(uint8_t *yuyv_image, uint8_t mut * mut rgb_image, int width, int height) {
+    int mut y;
+    int mut cr;
+    int mut cb;
+
+    double mut r;
+    double mut g;
+    double mut b;
+
+    int mut i = 0;
+    int mut j = 0;
+    for (; i < width * height * 3;) {
+        //first pixel
+        y = yuyv_image[j];
+        cb = yuyv_image[j+1];
+        cr = yuyv_image[j+3];
+
+        r = y + (1.4065 * (cr - 128));
+        g = y - (0.3455 * (cb - 128)) - (0.7169 * (cr - 128));
+        b = y + (1.7790 * (cb - 128));
+
+
+        //This prevents colour distortions in your rgb image
+        if (r < 0) {
+            r = 0;
+        } else if (r > 255) {
+            r = 255;
+        }
+        if (g < 0) {
+            g = 0;
+        } else if (g > 255) {
+            g = 255;
+        }
+        if (b < 0) {
+            b = 0;
+        } else if (b > 255) {
+            b = 255;
+        }
+
+        rgb_image[i]   = r;
+        rgb_image[i+1] = g;
+        rgb_image[i+2] = b;
+
+        //second pixel
+        y = yuyv_image[j+2];
+        cb = yuyv_image[j+1];
+        cr = yuyv_image[j+3];
+
+        r = y + (1.4065 * (cr - 128));
+        g = y - (0.3455 * (cb - 128)) - (0.7169 * (cr - 128));
+        b = y + (1.7790 * (cb - 128));
+
+        if (r < 0) {
+            r = 0;
+        } else if (r > 255) {
+            r = 255;
+        }
+        if (g < 0) {
+            g = 0;
+        } else if (g > 255) {
+            g = 255;
+        }
+        if (b < 0) {
+            b = 0;
+        } else if (b > 255) {
+            b = 255;
+        }
+
+        rgb_image[i+3] = r;
+        rgb_image[i+4] = g;
+        rgb_image[i+5] = b;
+
+
+
+
+        i+=6;
+        j+=4;
+    }
 }

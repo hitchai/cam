@@ -1,0 +1,158 @@
+using error;
+using <stdio.h>;
+using <X11/X.h>::{
+    Display as XDisplay,
+    XOpenDisplay,
+    Window,
+    XVisualInfo,
+    Colormap,
+    XSetWindowAttributes,
+    XWindowAttributes,
+    XEvent,
+    XStoreName,
+    XMapWindow,
+    ExposureMask,
+    XCreateColormap,
+    XCreateWindow,
+    DefaultRootWindow,
+    XGetWindowAttributes,
+};
+using <X11/Xlib.h>;
+using <GL/glx.h>::{
+    GLXContext,
+    glXCreateContext,
+    glXMakeCurrent,
+    glXChooseVisual,
+    None,
+    GLX_DOUBLEBUFFER,
+    GLX_RGBA,
+    GLX_DEPTH_SIZE,
+    glXSwapBuffers,
+};
+using <GL/glu.h>::{
+    gluLookAt,
+}
+
+using <GL/gl.h>::{
+    GLint,
+        glClearColor,
+        glClear,
+        glMatrixMode,
+        glLoadIdentity,
+        glOrtho,
+        glBegin,
+        glColor3f,
+        glEnd,
+        glVertex3f,
+        glEnable,
+        glViewport,
+        glGenTextures,
+        glBindTexture,
+        glTexImage2D,
+        glTexParameteri,
+        glTexCoord2f,
+};
+
+struct Display {
+    XDisplay mut*           dpy;
+    Window                  root;
+    XVisualInfo mut*        vi;
+    Window                  win;
+    GLXContext              glc;
+    XWindowAttributes       gwa;
+    XEvent                  xev;
+}
+
+pub fn open(Display mut* self, error::Error set<Error> mut *err)  {
+
+    self->dpy = XOpenDisplay(NULL);
+
+    if self->dpy == 0 {
+        error::fail(err, 1, "cannot connecto to X");
+        return;
+    }
+
+    self->root = DefaultRootWindow(self->dpy);
+
+    GLint mut att[4] = { GLX_RGBA, GLX_DEPTH_SIZE, 24, GLX_DOUBLEBUFFER, None };
+    self->vi = glXChooseVisual(self->dpy, 0, att);
+
+    if self->vi == 0 {
+        error::fail(err, 1, "no glx visuals");
+        return;
+    }
+
+    Colormap cmap = XCreateColormap(self->dpy, self->root, self->vi->visual, AllocNone);
+
+    XSetWindowAttributes mut swa;
+    swa.colormap = cmap;
+    swa.event_mask = ExposureMask;
+
+    self->win = XCreateWindow(self->dpy, self->root, 0, 0, 600, 600, 0, self->vi->depth, InputOutput, self->vi->visual, CWColormap | CWEventMask, &swa);
+
+    XMapWindow(self->dpy, self->win);
+    XStoreName(self->dpy, self->win, "summon");
+
+    self->glc = glXCreateContext(self->dpy, self->vi, NULL, GL_TRUE);
+    glXMakeCurrent(self->dpy, self->win, self->glc);
+
+    glEnable(GL_DEPTH_TEST);
+}
+
+pub fn show(Display mut* self, void * data, int width, int height) {
+    XGetWindowAttributes(self->dpy, self->win, &self->gwa);
+    glViewport(0, 0, self->gwa.width, self->gwa.height);
+
+
+    int mut texture = 0;
+    glGenTextures(1, &texture);
+    glBindTexture(GL_TEXTURE_2D, texture);
+
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_LUMINANCE, width, height, 0, GL_RED, GL_UNSIGNED_BYTE, data);
+
+    glBindTexture(GL_TEXTURE_2D, texture);
+
+    Draw();
+
+    glXSwapBuffers(self->dpy, self->win)
+}
+
+fn Draw() {
+    glEnable(GL_TEXTURE_2D);
+
+    glClearColor(1.0, 1.0, 1.0, 1.0);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+
+    glMatrixMode(GL_PROJECTION);
+    glLoadIdentity();
+    glOrtho(-1., 1., -1., 1., 1., 20.);
+
+    glMatrixMode(GL_MODELVIEW);
+    glLoadIdentity();
+    gluLookAt(0., 0., 10., 0., 0., 0., 0., 1., 0.);
+
+    glBegin(GL_QUADS);
+
+    glTexCoord2f(1, 1);
+    //glVertex3f(-0.75, -0.75, 0.);
+    glVertex3f(-1, -1, 0.);
+
+    glTexCoord2f(0, 1);
+    //glVertex3f( 0.75, -0.75, 0.);
+    glVertex3f( 1, -1, 0.);
+
+    glTexCoord2f(0, 0);
+    glVertex3f( 1,  1, 0.);
+
+    glTexCoord2f(1, 0);
+    glVertex3f(-1,  1, 0.);
+
+    glEnd();
+}
+

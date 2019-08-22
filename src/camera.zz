@@ -1,0 +1,256 @@
+using error;
+using <linux/videodev2.h>::{
+    (struct v4l2_capability) as v4l2_capability,
+    (struct v4l2_format) as v4l2_format,
+    (struct v4l2_requestbuffers) as v4l2_requestbuffers,
+    (struct v4l2_buffer) as v4l2_buffer,
+    (struct v4l2_control) as v4l2_control,
+    (struct v4l2_streamparm) as v4l2_streamparm,
+    (enum v4l2_buf_type) as v4l2_buf_type,
+    VIDIOC_QUERYCAP,
+    V4L2_CAP_STREAMING,
+    V4L2_BUF_TYPE_VIDEO_CAPTURE,
+    V4L2_PIX_FMT_YUYV,
+    V4L2_FIELD_NONE,
+    VIDIOC_S_FMT,
+    V4L2_MEMORY_MMAP,
+    VIDIOC_REQBUFS,
+    VIDIOC_QUERYBUF,
+    VIDIOC_QBUF,
+    VIDIOC_STREAMON,
+    VIDIOC_STREAMOFF,
+    VIDIOC_DQBUF,
+    VIDIOC_S_PARM,
+};
+using <fcntl.h>::{O_RDWR, O_NONBLOCK}
+using <unistd.h>::{
+    open as stdopen,
+    close as stdclose
+};
+using <errno.h>::{errno};
+using <stropts.h>::{ioctl};
+using <stdio.h>::{fprintf, stderr, EINTR};
+using <sys/mman.h>::{mmap, munmap};
+using <stdint.h>::{size_t, intptr_t};
+
+
+
+const int BUFFER_COUNT = 4;
+const int IMAGE_WIDTH  = 640;
+const int IMAGE_HEIGHT = 480;
+
+
+pub struct Frame {
+    int     fd;
+    void*   data;
+    int     index;
+}
+
+struct Mmap {
+    void mut*   ptr;
+    size_t      len;
+}
+
+pub struct Camera {
+    int     fd;
+    Mmap    buffers[BUFFER_COUNT];
+
+    int height;
+    int width;
+}
+
+
+pub fn open(Camera set<open> mut* self, error::Error set<Error> mut *err, char* path) {
+    self->fd = stdopen(path, O_RDWR|O_NONBLOCK);
+    if (self->fd < 1) {
+        error::fail_with_errno(err, "cannot open %s", path);
+        return;
+    }
+
+    // query capabilities
+    v4l2_capability cap;
+    if (xioctl (self->fd, VIDIOC_QUERYCAP, &cap) == -1) {
+        error::fail_with_errno(err, "VIDIOC_QUERYCAP");
+        goto cleanup;
+    }
+
+    if (!(cap.capabilities & V4L2_CAP_STREAMING)) {
+        error::fail_with_errno(err, "%s is not a camera?", path);
+        goto cleanup;
+    }
+
+    fprintf(stderr, "[cam] opened %s \"%s\"\n", path, cap.card);
+
+
+
+    v4l2_streamparm mut parm = {0};
+    parm.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+    parm.parm.capture.timeperframe.numerator = 1;
+    parm.parm.capture.timeperframe.denominator = 60;
+    if (xioctl (self->fd, VIDIOC_S_PARM, &parm) == -1) {
+        error::fail_with_errno(err, "setup video format");
+        goto cleanup;
+    }
+
+
+    v4l2_format mut fmt     = {0};
+    fmt.type                = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+    fmt.fmt.pix.width       = IMAGE_WIDTH;
+    fmt.fmt.pix.height      = IMAGE_HEIGHT;
+    fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_YUYV;
+    fmt.fmt.pix.field       = V4L2_FIELD_NONE;
+
+    if (xioctl (self->fd, VIDIOC_S_FMT, &fmt) == -1) {
+        error::fail_with_errno(err, "setup video format");
+        goto cleanup;
+    }
+
+    fprintf(stderr, "[cam] v4l size to %dx%d\n", fmt.fmt.pix.width, fmt.fmt.pix.height);
+
+    self->height = fmt.fmt.pix.height;
+    self->width  = fmt.fmt.pix.width;
+
+    if fmt.fmt.pix.pixelformat != V4L2_PIX_FMT_YUYV {
+        error::fail_with_errno(err, "v4l gave us pixelformat %d", fmt.fmt.pix.pixelformat);
+        goto cleanup;
+    }
+
+    v4l2_requestbuffers mut req = {0};
+    req.count       = BUFFER_COUNT;
+    req.type        = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+    req.memory      = V4L2_MEMORY_MMAP;
+
+    if xioctl (self->fd, VIDIOC_REQBUFS, &req) == -1 {
+        error::fail_with_errno(err, "setup video buffers");
+        goto cleanup;
+    }
+    fprintf(stderr, "[cam] %d buffers\n", req.count);
+
+
+    // get the buffer pointers
+    for (int mut i = 0; i < req.count; i++) {
+        v4l2_buffer mut buf = v4l2_buffer {
+            .type   = V4L2_BUF_TYPE_VIDEO_CAPTURE,
+            .memory = V4L2_MEMORY_MMAP,
+            .index  = i,
+        };
+
+        if xioctl(self->fd, VIDIOC_QUERYBUF, &buf) == -1 {
+            error::fail_with_errno(err, "get video buffer %d", i);
+            goto cleanup;
+        }
+
+        (self->buffers[i]).len = buf.length;
+        (self->buffers[i]).ptr = mmap(0, buf.length, PROT_READ|PROT_WRITE, MAP_SHARED, self->fd, buf.m.offset);
+
+        if (self->buffers[i]).ptr == 0 {
+            error::fail_with_errno(err, "mmap failed");
+            goto cleanup;
+        }
+    }
+
+    return;
+cleanup:
+    close(self);
+}
+
+pub fn close(Camera unset<open> mut* self) {
+    for (int mut i = 0; i < BUFFER_COUNT ; i++) {
+        if (self->buffers[i]).ptr != 0 {
+            munmap((self->buffers[i]).ptr, (self->buffers[i]).len);
+        }
+    }
+    if (self->fd > 0) {
+        stdclose(self->fd);
+    }
+}
+
+
+pub fn streamon(Camera require<open> set<streamon> mut* self, error::Error set<Error> mut *err) {
+    for (int mut i = 0; i < BUFFER_COUNT ; ++i) {
+        if (self->buffers[i]).ptr == 0 {
+            continue;
+        }
+
+        v4l2_buffer mut buf = v4l2_buffer {
+            .type   = V4L2_BUF_TYPE_VIDEO_CAPTURE,
+            .memory = V4L2_MEMORY_MMAP,
+            .index  = i,
+        };
+
+        if xioctl(self->fd, VIDIOC_QBUF, &buf) == -1 {
+            error::fail_with_errno(err, "QBUF %d", i);
+            return;
+        }
+    }
+
+    v4l2_buf_type type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+
+    if xioctl(self->fd, VIDIOC_STREAMON, &type) == -1 {
+        error::fail_with_errno(err, "stream on");
+        return;
+    }
+}
+
+
+pub fn streamoff(Camera require<open> unset<streamon> mut* self, error::Error set<Error> mut *err) {
+    v4l2_buf_type type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+
+    if xioctl(self->fd, VIDIOC_STREAMOFF, &type) == -1 {
+        error::fail_with_errno(err, "stream off");
+        return;
+    }
+}
+
+
+
+pub fn take(Camera require<open> require<streamon> mut* self, error::Error set<Error> mut *err) -> Frame {
+
+    v4l2_buffer mut buf = v4l2_buffer {
+        .type   = V4L2_BUF_TYPE_VIDEO_CAPTURE,
+        .memory = V4L2_MEMORY_MMAP,
+    };
+
+    if xioctl(self->fd, VIDIOC_DQBUF, &buf) == -1 {
+        error::fail_with_errno(err, "dqbuf");
+        return Frame{
+            .fd    = 0,
+            .data  = 0,
+            .index = 0,
+        };
+    }
+
+    return Frame {
+        .fd    = self->fd,
+        .data  = (self->buffers[buf.index]).ptr,
+        .index = buf.index,
+    };
+}
+
+pub fn release(Frame* self, error::Error set<Error> mut *err) {
+    v4l2_buffer mut buf = v4l2_buffer {
+        .type   = V4L2_BUF_TYPE_VIDEO_CAPTURE,
+        .memory = V4L2_MEMORY_MMAP,
+        .index  = self->index,
+    };
+
+    if xioctl(self->fd, VIDIOC_QBUF, &buf) == -1 {
+        error::fail_with_errno(err, "dqbuf");
+        return;
+    }
+}
+
+
+
+fn xioctl(int fh, int request, void unsafe *arg) -> int {
+    int mut r;
+    for (;;) {
+        r = ioctl(fh, request, arg);
+        if (-1 == r && EINTR == errno) {
+            continue;
+        } else {
+            return r;
+        }
+    }
+}
+

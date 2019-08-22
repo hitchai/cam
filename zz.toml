@@ -2,23 +2,19 @@
 name    = "cam"
 version = "0.1.0"
 
+pkgconfig = ['sdl2']
 
-std     = "c++17"
+#std     = "c++17"
 cflags = [
-    "-D__STDC_CONSTANT_MACROS",
-    "-I/usr/include/opencv4",
+    "-g",
     "-O3",
 ]
 
 lflags = [
-    "-lavformat",
-    "-lavcodec",
-    "-lavutil",
-    "-lavdevice",
-    "-lswscale",
-    "-lopencv_imgproc",
-    "-lopencv_core",
-    "-lopencv_highgui",
+    "-g",
+    "-lX11",
+    "-lGL",
+    "-lGLU",
 ]
 
 
