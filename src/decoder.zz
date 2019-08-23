@@ -1,0 +1,121 @@
+using <libavcodec/avcodec.h> as avcodec;
+using <libavcodec/avcodec.h> as avcodec;
+using <libavutil/avutil.h> as avutil;
+using error;
+using <stdint.h>::{uint8_t, size_t};
+using <string.h>::{memcpy};
+using <stdio.h>::{fprintf, stderr};
+using <assert.h>::{assert};
+using <libavutil/pixdesc.h> as pixdesc;
+
+using <libavcodec/avcodec.h>::{
+    (enum AVPixelFormat) as AVPixelFormat,
+    (struct AVCodecContext) as AVCodecContext,
+};
+
+pub struct Decoder {
+    avcodec::AVCodec*               codec;
+    avcodec::AVCodecParserContext mut*  parser;
+    avcodec::AVCodecContext mut*    ctx;
+    avcodec::AVPacket               inpkt;
+    avcodec::AVFrame mut*           outframe;
+}
+
+
+fn fail_with_averror(error::Error set<error> unset<error> mut* err, int averr) {
+    char mut s[avcodec::AV_ERROR_MAX_STRING_SIZE];
+    avutil::av_make_error_string(s, avcodec::AV_ERROR_MAX_STRING_SIZE, averr);
+    error::fail(err, averr, "ffmpeg: %s", s);
+}
+
+
+fn get_format_cb(AVCodecContext mut * mut s, AVPixelFormat * mut fmt) -> AVPixelFormat {
+    fprintf(stderr, "select format:\n");
+    for (; *fmt; fmt++) {
+        fprintf(stderr, " - %s\n", pixdesc::av_get_pix_fmt_name (*fmt));
+    }
+    return avcodec::AV_PIX_FMT_YUVJ422P;
+}
+
+
+pub fn open(Decoder set<open> mut* self, error::Error set<error> mut* err) {
+    self->codec = avcodec::avcodec_find_decoder(avcodec::AV_CODEC_ID_MJPEG);
+    if self->codec == 0 {
+        error::fail(err, 93, "codec not found in ffmpeg");
+        return;
+    }
+
+    self->parser = avcodec::av_parser_init(self->codec->id);
+    if self->parser == 0 {
+        error::fail(err, 93, "parser not found in ffmpeg");
+        return;
+    }
+
+    self->ctx = avcodec::avcodec_alloc_context3(self->codec);
+    if (!self->ctx) {
+        error::fail(err, 93, "could not allocate video codec context");
+        return;
+    }
+
+    self->ctx->get_format = &get_format_cb;
+
+    int r = avcodec::avcodec_open2(self->ctx, self->codec, 0);
+    if (r < 0) {
+        fail_with_averror(err, r);
+        return;
+    }
+
+    avcodec::av_init_packet(&(self->inpkt));
+    self->outframe = avcodec::av_frame_alloc();
+    if (self->outframe == 0) {
+        error::fail(err, 1, "could not allocate video frame");
+        return;
+    }
+}
+
+pub fn decode(
+        Decoder require<open> mut* self,
+        error::Error set<error> mut* err,
+        uint8_t* mut indata,
+        size_t   mut insize,
+        uint8_t mut* outdata,
+        size_t mut* out_stride)
+{
+    while (insize > 0) {
+        int ret = avcodec::av_parser_parse2(self->parser, self->ctx, &(self->inpkt.data), &(self->inpkt.size),
+                indata, insize, avcodec::AV_NOPTS_VALUE, avcodec::AV_NOPTS_VALUE, 0);
+        if (ret < 0) {
+            error::fail(err, 1, "decoding failure");
+            return;
+        }
+
+        indata += ret;
+        insize -= ret;
+
+        if (self->inpkt.size > 0) {
+            int r = avcodec::avcodec_send_packet(self->ctx, &(self->inpkt));
+            if (r < 0) {
+                fail_with_averror(err, r);
+                return;
+            }
+        }
+
+        for (;;) {
+            int r = avcodec::avcodec_receive_frame(self->ctx, self->outframe);
+            if (r == avcodec::AVERROR(EAGAIN) || r == avcodec::AVERROR_EOF) {
+                break;
+            } else if (r < 0) {
+                fail_with_averror(err, r);
+                return;
+            }
+
+            assert(self->outframe->format == avcodec::AV_PIX_FMT_YUVJ422P);
+
+            fprintf(stderr, "saving frame %3d %dx%d %d\n",
+                    self->ctx->frame_number, self->outframe->width, self->outframe->height, self->outframe->linesize[0]);
+
+            *out_stride = self->outframe->linesize[0];
+            memcpy(outdata, self->outframe->data[0], self->outframe->height * self->outframe->linesize[0]);
+        }
+    }
+}

@@ -1,6 +1,8 @@
 using error;
 using camera;
 using display;
+using decoder;
+
 using <sys/select.h>::{
     select,
     fd_set,
@@ -19,7 +21,7 @@ using <stdio.h>::{
     stderr,
     exit,
 };
-using <stdint.h>::{uint8_t};
+using <stdint.h>::{uint8_t, size_t};
 using <memory.h>::{
     malloc,
     alloca,
@@ -34,17 +36,20 @@ pub fn main() -> int {
     error::abort(&err);
 
     camera::Camera mut cam = {0};
+    camera::open(&cam, &err, "/dev/video0");
+    error::abort(&err);
 
-    camera::open(&cam, &err, "/dev/video2");
+    decoder::Decoder mut dec = {0};
+    decoder::open(&dec, &err);
     error::abort(&err);
 
     camera::streamon(&cam, &err);
     error::abort(&err);
 
-
     uint8_t mut* mut rgb_frame = malloc(cam.height * cam.width * 3);
+    uint8_t mut* mut yuy_frame = malloc(cam.height * cam.width * 3);
     memset(rgb_frame, 100, cam.height * cam.width * 3);
-
+    memset(yuy_frame, 100, cam.height * cam.width * 3);
 
     for (;;) {
         fd_set mut fds;
@@ -74,7 +79,12 @@ pub fn main() -> int {
         error::abort(&err);
 
 
-        yuyv_to_gray(frame.data, rgb_frame, cam.width, cam.height);
+        size_t mut stride = 0;
+        decoder::decode(&dec, &err, frame.data, frame.size, yuy_frame, &stride);
+        error::abort(&err);
+
+
+        yuyv_to_gray(yuy_frame, rgb_frame, cam.width, cam.height, stride);
         //yuyv_to_rgb(frame.data, rgb_frame, cam.width, cam.height);
 
 
@@ -102,15 +112,16 @@ macro rgbclip(to, val) {
     }
 }
 
-fn yuyv_to_gray(uint8_t *src, uint8_t mut * mut dest , int width, int height) {
+fn yuyv_to_gray(uint8_t *src, uint8_t mut * mut dest , int width, int height, size_t stride) {
     for (int mut y = 0; y < height ; y++) {
-        char * mut src_r = src + (width * 2 * y);
-        char mut * mut gray = dest + (width* y);
+        uint8_t* mut      yuy  = src  + (stride * y);
+        uint8_t  mut* mut gray = dest + (width  * y);
+
         for (int mut x = 0; x < width; x += 2) {
-            gray[x] = src_r[0];
-            src_r += 2;
-            gray[x + 1] = src_r[0];
-            src_r += 2;
+            gray[x] = yuy[0];
+            yuy += 1;
+            gray[x + 1] = yuy[0];
+            yuy += 1;
         }
     }
 }

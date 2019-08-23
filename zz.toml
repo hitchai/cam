@@ -2,7 +2,12 @@
 name    = "cam"
 version = "0.1.0"
 
-pkgconfig = ['sdl2']
+pkgconfig = [
+    'sdl2',
+    'libavcodec',
+    'libavformat',
+    'libavutil',
+]
 
 #std     = "c++17"
 cflags = [

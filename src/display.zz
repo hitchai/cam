@@ -31,10 +31,11 @@ using <GL/glx.h>::{
 };
 using <GL/glu.h>::{
     gluLookAt,
-}
+};
 
 using <GL/gl.h>::{
     GLint,
+        GLuint,
         glClearColor,
         glClear,
         glMatrixMode,
@@ -63,18 +64,17 @@ struct Display {
     XEvent                  xev;
 }
 
-pub fn open(Display mut* self, error::Error set<Error> mut *err)  {
+pub fn open(Display mut* self, error::Error set<error> mut *err)  {
 
-    self->dpy = XOpenDisplay(NULL);
-
+    self->dpy = XOpenDisplay(0);
     if self->dpy == 0 {
-        error::fail(err, 1, "cannot connecto to X");
+        error::fail(err, 1, "cannot connect to to X");
         return;
     }
 
     self->root = DefaultRootWindow(self->dpy);
 
-    GLint mut att[4] = { GLX_RGBA, GLX_DEPTH_SIZE, 24, GLX_DOUBLEBUFFER, None };
+    GLint mut att[] = { GLX_RGBA, GLX_DEPTH_SIZE, 24, GLX_DOUBLEBUFFER, None };
     self->vi = glXChooseVisual(self->dpy, 0, att);
 
     if self->vi == 0 {
@@ -89,6 +89,10 @@ pub fn open(Display mut* self, error::Error set<Error> mut *err)  {
     swa.event_mask = ExposureMask;
 
     self->win = XCreateWindow(self->dpy, self->root, 0, 0, 600, 600, 0, self->vi->depth, InputOutput, self->vi->visual, CWColormap | CWEventMask, &swa);
+    if self->win == 0 {
+        error::fail(err, 1, "cannot create win");
+        return;
+    }
 
     XMapWindow(self->dpy, self->win);
     XStoreName(self->dpy, self->win, "summon");
@@ -104,7 +108,7 @@ pub fn show(Display mut* self, void * data, int width, int height) {
     glViewport(0, 0, self->gwa.width, self->gwa.height);
 
 
-    int mut texture = 0;
+    GLuint mut texture = 0;
     glGenTextures(1, &texture);
     glBindTexture(GL_TEXTURE_2D, texture);
 
@@ -113,6 +117,7 @@ pub fn show(Display mut* self, void * data, int width, int height) {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 
+    //glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, width, height, 0, GL_RED, GL_UNSIGNED_BYTE, data);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_LUMINANCE, width, height, 0, GL_RED, GL_UNSIGNED_BYTE, data);
 
     glBindTexture(GL_TEXTURE_2D, texture);
