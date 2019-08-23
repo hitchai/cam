@@ -84,11 +84,12 @@ pub fn main() -> int {
         error::abort(&err);
 
 
-        yuyv_to_gray(yuy_frame, rgb_frame, cam.width, cam.height, stride);
+        yuyv_to_merged(yuy_frame, rgb_frame, cam.width, cam.height, stride);
+        //yuyv_to_gray(yuy_frame, rgb_frame, cam.width, cam.height, stride);
         //yuyv_to_rgb(frame.data, rgb_frame, cam.width, cam.height);
 
 
-        display::show(&view, rgb_frame, cam.width, cam.height);
+        display::show(&view, rgb_frame, cam.width/2, cam.height);
 
         camera::release(&frame, &err);
         error::abort(&err);
@@ -109,6 +110,27 @@ macro rgbclip(to, val) {
         to = 0;
     } else {
         to = v;
+    }
+}
+
+fn yuyv_to_merged(uint8_t *src, uint8_t mut * mut dest , int width, int height, size_t stride) {
+    int half = width/2;
+
+    for (int mut y = 0; y < height ; y++) {
+        uint8_t* mut      yuy  = src  + (stride * y);
+        uint8_t  mut* mut gray = dest + (half * 3  * y);
+
+
+        for (int mut x = 0; x < (half* 3) ; x += 6) {
+
+            gray[x    ] = yuy[0];
+            gray[x + 1] = yuy[half];
+            yuy += 1;
+
+            gray[x + 3] = yuy[0];
+            gray[x + 4] = yuy[half];
+            yuy += 1;
+        }
     }
 }
 
