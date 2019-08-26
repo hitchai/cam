@@ -40,6 +40,12 @@ const int IMAGE_WIDTH  = 2560/2;
 const int IMAGE_HEIGHT = 960/2;
 
 
+
+pub enum Format {
+    MJPEG,
+    YUYV,
+}
+
 pub struct Frame {
     int     fd;
     void*   data;
@@ -58,6 +64,9 @@ pub struct Camera {
 
     int height;
     int width;
+
+
+    Format format;
 }
 
 
@@ -98,7 +107,7 @@ pub fn open(Camera set<open> mut* self, error::Error set<error> mut *err, char* 
     fmt.type                = V4L2_BUF_TYPE_VIDEO_CAPTURE;
     fmt.fmt.pix.width       = IMAGE_WIDTH;
     fmt.fmt.pix.height      = IMAGE_HEIGHT;
-    fmt.fmt.pix.pixelformat = v4l2::V4L2_PIX_FMT_MJPEG;
+    //fmt.fmt.pix.pixelformat = v4l2::V4L2_PIX_FMT_MJPEG;
     fmt.fmt.pix.field       = v4l2::V4L2_FIELD_NONE;
 
     if (xioctl (self->fd, VIDIOC_S_FMT, &fmt) == -1) {
@@ -111,15 +120,23 @@ pub fn open(Camera set<open> mut* self, error::Error set<error> mut *err, char* 
     self->height = fmt.fmt.pix.height;
     self->width  = fmt.fmt.pix.width;
 
-    if fmt.fmt.pix.pixelformat != v4l2::V4L2_PIX_FMT_MJPEG{
-        char *pfn = (char*)&fmt.fmt.pix.pixelformat;
-        error::fail(err, 22, "v4l gave us pixelformat %c%c%c%c",
-                pfn + 0,
-                pfn + 1,
-                pfn + 2,
-                pfn + 3
-        );
-        goto cleanup;
+    switch fmt.fmt.pix.pixelformat {
+        v4l2::V4L2_PIX_FMT_MJPEG => {
+            self->format = Format::MJPEG;
+        }
+        v4l2::V4L2_PIX_FMT_YUYV => {
+            self->format = Format::YUYV;
+        }
+        default => {
+            char *pfn = (char*)(&fmt.fmt.pix.pixelformat);
+            error::fail(err, 22, "v4l gave us pixelformat %c%c%c%c",
+                    *(pfn + 0),
+                    *(pfn + 1),
+                    *(pfn + 2),
+                    *(pfn + 3)
+                    );
+            goto cleanup;
+        }
     }
 
     v4l2_requestbuffers mut req = {0};

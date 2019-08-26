@@ -1,5 +1,6 @@
 using error;
 using <stdio.h>;
+using <stdbool.h>::{bool};
 using <X11/X.h>::{
     Display as XDisplay,
     XOpenDisplay,
@@ -103,7 +104,7 @@ pub fn open(Display mut* self, error::Error set<error> mut *err)  {
     glEnable(GL_DEPTH_TEST);
 }
 
-pub fn show(Display mut* self, void * data, int width, int height) {
+pub fn show(Display mut* self, void * data, int width, int height, bool flipped) {
     XGetWindowAttributes(self->dpy, self->win, &self->gwa);
     glViewport(0, 0, self->gwa.width, self->gwa.height);
 
@@ -117,17 +118,20 @@ pub fn show(Display mut* self, void * data, int width, int height) {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, width, height, 0, GL_RGB, GL_UNSIGNED_BYTE, data);
-    //glTexImage2D(GL_TEXTURE_2D, 0, GL_LUMINANCE, width, height, 0, GL_RED, GL_UNSIGNED_BYTE, data);
+    if flipped {
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, width, height, 0, GL_RGB, GL_UNSIGNED_BYTE, data);
+    } else {
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_LUMINANCE, width, height, 0, GL_RED, GL_UNSIGNED_BYTE, data);
+    }
 
     glBindTexture(GL_TEXTURE_2D, texture);
 
-    Draw();
+    Draw(flipped);
 
     glXSwapBuffers(self->dpy, self->win)
 }
 
-fn Draw() {
+fn Draw(bool flipped) {
     glEnable(GL_TEXTURE_2D);
 
     glClearColor(1.0, 1.0, 1.0, 1.0);
@@ -144,21 +148,31 @@ fn Draw() {
 
     glBegin(GL_QUADS);
 
-    //glTexCoord2f(1, 1);
-    glTexCoord2f(0, 0);
-    glVertex3f(-1, -1, 0.);
+    if flipped {
+        glTexCoord2f(0, 0);
+        glVertex3f(-1, -1, 0.);
 
-    //glTexCoord2f(0, 1);
-    glTexCoord2f(1, 0);
-    glVertex3f( 1, -1, 0.);
+        glTexCoord2f(1, 0);
+        glVertex3f( 1, -1, 0.);
 
-    //glTexCoord2f(0, 0);
-    glTexCoord2f(1, 1);
-    glVertex3f( 1,  1, 0.);
+        glTexCoord2f(1, 1);
+        glVertex3f( 1,  1, 0.);
 
-    //glTexCoord2f(1, 0);
-    glTexCoord2f(0, 1);
-    glVertex3f(-1,  1, 0.);
+        glTexCoord2f(0, 1);
+        glVertex3f(-1,  1, 0.);
+    } else {
+        glTexCoord2f(1, 1);
+        glVertex3f(-1, -1, 0.);
+
+        glTexCoord2f(0, 1);
+        glVertex3f( 1, -1, 0.);
+
+        glTexCoord2f(0, 0);
+        glVertex3f( 1,  1, 0.);
+
+        glTexCoord2f(1, 0);
+        glVertex3f(-1,  1, 0.);
+    }
 
     glEnd();
 }

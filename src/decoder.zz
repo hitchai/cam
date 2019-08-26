@@ -22,10 +22,18 @@ pub struct Decoder {
 }
 
 
-fn fail_with_averror(error::Error set<error> unset<error> mut* err, int averr) {
+pub fn fail_with_averror(
+        error::Error set<error> unset<error> mut* err,
+        int averr,
+        char* callsite_macro<__FILE__>      file,
+        char* callsite_macro<__FUNCTION__>  scope,
+        int   callsite_macro<__LINE__>      line,
+
+) {
     char mut s[avcodec::AV_ERROR_MAX_STRING_SIZE];
     avutil::av_make_error_string(s, avcodec::AV_ERROR_MAX_STRING_SIZE, averr);
     error::fail(err, averr, "ffmpeg: %s", s);
+    error::backtrace(err, file, scope, line);
 }
 
 

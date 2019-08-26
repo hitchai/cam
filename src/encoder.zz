@@ -1,0 +1,213 @@
+using error;
+using <libavcodec/avcodec.h> as avcodec;
+using <libavcodec/avcodec.h> as avcodec;
+using <libavutil/avutil.h> as avutil;
+using <libavutil/opt.h> as avopt;
+using <stdio.h>::{
+    printf,
+    fprintf,
+    stderr,
+};
+using <stdint.h>::{
+    uint8_t,
+    size_t,
+};
+using decoder::{fail_with_averror};
+using <assert.h>::{assert};
+
+struct Encoder {
+    avcodec::AVCodecContext mut* ctx;
+    avcodec::AVCodec*       codec;
+    avcodec::AVFrame mut*   inframe;
+    avcodec::AVPacket mut*  outpkt;
+    uint8_t         outbuf[10000];
+}
+
+pub fn open(Encoder set<open> mut* self, error::Error set<error> mut* err, int width, int height) {
+    self->codec = avcodec::avcodec_find_encoder_by_name("libx264");
+    //self->codec = avcodec::avcodec_find_decoder(avcodec::AV_CODEC_ID_H264);
+    if self->codec == 0 {
+        error::fail(err, 93, "codec not found in ffmpeg");
+        return;
+    }
+    self->ctx = avcodec::avcodec_alloc_context3(self->codec);
+    if (!self->ctx) {
+        error::fail(err, 93, "could not allocate video codec context");
+        return;
+    }
+
+
+
+    /* put sample parameters */
+    self->ctx->bit_rate         = 400000;
+    /* resolution must be a multiple of two */
+    self->ctx->width            = width;
+    self->ctx->height           = height;
+    /* frames per second */
+    self->ctx->time_base        = (avutil::AVRational){1,25};
+    self->ctx->framerate        = (avutil::AVRational){25, 1};
+    self->ctx->pix_fmt          = avcodec::AV_PIX_FMT_YUV420P;
+    /* emit one intra frame every ten frames
+     * check frame pict_type before passing frame
+     * to encoder, if frame->pict_type is AV_PICTURE_TYPE_I
+     * then gop_size is ignored and the output of encoder
+     * will always be I frame irrespective to gop_size
+     */
+    self->ctx->gop_size = 10;
+    self->ctx->max_b_frames = 1;
+
+    avopt::av_opt_set(self->ctx->priv_data, "preset", "faster", 0);
+
+    int mut r = avcodec::avcodec_open2(self->ctx, self->codec, 0);
+    if (r < 0) {
+        fail_with_averror(err, r);
+        return;
+    }
+
+    self->inframe  = avcodec::av_frame_alloc();
+    self->outpkt   = avcodec::av_packet_alloc();
+
+    self->inframe->format = avcodec::AV_PIX_FMT_YUV420P;
+    self->inframe->width  = width;
+    self->inframe->height = height;
+
+    r = avcodec::av_frame_get_buffer(self->inframe, 32);
+    if (r < 0) {
+        fail_with_averror(err, r);
+        return;
+    }
+}
+
+pub fn encode(
+    Encoder require<open> mut* self,
+    error::Error set<error> mut* err,
+    uint8_t* mut indata,
+    size_t   mut insize,
+){
+
+    printf("encoding frame %d\n", self->inframe->pts);
+    int mut ret = avcodec::avcodec_send_frame(self->ctx, self->inframe);
+    if (ret < 0) {
+        fail_with_averror(err, ret);
+        return;
+    }
+    self->inframe->pts += 1 ;
+
+    while (ret >= 0) {
+        ret = avcodec::avcodec_receive_packet(self->ctx, self->outpkt);
+        if ret == avcodec::AVERROR(EAGAIN) || ret == avcodec::AVERROR_EOF {
+            return;
+        } else if (ret < 0) {
+            fail_with_averror(err, ret);
+            return;
+        }
+
+        printf("Write packet %d (size=%d)\n", self->outpkt->pts, self->outpkt->size);
+        avcodec::av_packet_unref(self->outpkt);
+    }
+}
+
+#if 0
+
+fn video_encode_example(char *filename, error::Error set<error> mut* err) {
+    AVCodecContext *c = 0;
+
+    /* find the mpeg1 video encoder */
+    AVCodec* codec = avcodec_find_encoder(CODEC_ID_MPEG1VIDEO);
+    if (!codec) {
+        error::fail(err, 1, "ffmpeg missing codec");
+        return;
+    }
+
+    AVCodecContext* ctx = avcodec_alloc_context();
+    AVFrame* picture = avcodec_alloc_frame();
+
+    /* put sample parameters */
+    ctx->bit_rate = 400000;
+    /* resolution must be a multiple of two */
+    ctx->width = 352;
+    ctx->height = 288;
+    /* frames per second */
+    ctx->time_base= (AVRational){1,25};
+    ctx->gop_size = 10; /* emit one intra frame every ten frames */
+    ctx->max_b_frames=1;
+    ctx->pix_fmt = PIX_FMT_YUV420P;
+
+    /* open it */
+    if (avcodec_open(ctx, codec) < 0) {
+        fprintf(stderr, "could not open codec\n");
+        goto cleanup;
+    }
+
+    f = fopen(filename, "wb");
+    if (!f) {
+        fprintf(stderr, "could not open %s\n", filename);
+        exit(1);
+    }
+
+    /* alloc image and output buffer */
+    outbuf_size = 100000;
+    outbuf = malloc(outbuf_size);
+    size = c->width * c->height;
+    picture_buf = malloc((size * 3) / 2); /* size for YUV 420 */
+
+    picture->data[0] = picture_buf;
+    picture->data[1] = picture->data[0] + size;
+    picture->data[2] = picture->data[1] + size / 4;
+    picture->linesize[0] = c->width;
+    picture->linesize[1] = c->width / 2;
+    picture->linesize[2] = c->width / 2;
+
+    /* encode 1 second of video */
+    for(i=0;i<25;i++) {
+        fflush(stdout);
+        /* prepare a dummy image */
+        /* Y */
+        for(y=0;y<c->height;y++) {
+            for(x=0;x<c->width;x++) {
+                (picture->data[0])[y * picture->linesize[0] + x] = x + y + i * 3;
+            }
+        }
+
+        /* Cb and Cr */
+        for(y=0;y<c->height/2;y++) {
+            for(x=0;x<c->width/2;x++) {
+                (picture->data[1])[y * picture->linesize[1] + x] = 128 + y + i * 2;
+                (picture->data[2])[y * picture->linesize[2] + x] = 64 + x + i * 5;
+            }
+        }
+
+        /* encode the image */
+        out_size = avcodec_encode_video(c, outbuf, outbuf_size, picture);
+        printf("encoding frame %3d (size=%5d)\n", i, out_size);
+        fwrite(outbuf, 1, out_size, f);
+    }
+
+    /* get the delayed frames */
+    for(; out_size; i++) {
+        fflush(stdout);
+        out_size = avcodec_encode_video(c, outbuf, outbuf_size, NULL);
+        printf("write frame %3d (size=%5d)\n", i, out_size);
+        fwrite(outbuf, 1, out_size, f);
+    }
+
+    /* add sequence end code to have a real mpeg file */
+    outbuf[0] = 0x00;
+    outbuf[1] = 0x00;
+    outbuf[2] = 0x01;
+    outbuf[3] = 0xb7;
+    //fwrite(outbuf, 1, 4, f);
+    //fclose(f);
+cleanup:
+
+    if ctx {
+        avcodec_close(ctx);
+        av_free(ctx);
+    }
+
+    if picture {
+        av_free(picture);
+    }
+}
+
+#endif
